@@ -1,0 +1,4 @@
+gcc -fPIC -shared -o madigan.so madigan.c $(pkg-config --cflags --libs lv2 jansson lilv-0 uuid) -lpthread
+
+sudo mkdir -p /usr/lib/lv2/madigan.lv2
+sudo cp madigan.so manifest.ttl /usr/lib/lv2/madigan.lv2

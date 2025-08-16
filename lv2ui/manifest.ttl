@@ -1,0 +1,21 @@
+@prefix lv2:   <http://lv2plug.in/ns/lv2core#> .                                                                                                                                                   
+@prefix ui:    <http://lv2plug.in/ns/extensions/ui#> .
+@prefix urid:  <http://lv2plug.in/ns/ext/urid#> .                                                                                                                                                  
+
+<http://helander.network/lv2ui/madigan>
+	a ui:UI ;
+	lv2:requiredFeature urid:map ;
+        lv2:requiredFeature ui:ExternaUI ;
+        lv2:optionslFeature ui:idleInterface ;
+#	lv2:optionalFeature ui:requestValue ;
+	lv2:extensionData ui:showInterface ;
+        ui:binary <madigan.so> ;                                                                                                                                                                 
+#	ui:portNotification [
+#		lv2:symbol "notify" ;
+#		ui:notifyType atom:Blank
+#	]
+        .
+
+#<http://gareus.org/oss/lv2/b_synth> ui:ui <http://helander.network/plugins/uibridge> .
+#<urn:ardour:a-fluidsynth>  ui:ui <http://helander.network/plugins/uibridge> .
+
