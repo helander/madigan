@@ -16,6 +16,6 @@
 #	]
         .
 
-#<http://gareus.org/oss/lv2/b_synth> ui:ui <http://helander.network/plugins/uibridge> .
-#<urn:ardour:a-fluidsynth>  ui:ui <http://helander.network/plugins/uibridge> .
+<http://gareus.org/oss/lv2/b_synth> ui:ui <http://helander.network/lv2ui/madigan> .
+<urn:ardour:a-fluidsynth>  ui:ui <http://helander.network/lv2ui/madigan> .
 

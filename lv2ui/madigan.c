@@ -37,6 +37,14 @@
 #define STATE_RESET 0
 #define STATE_OPERATIONAL 1
 
+#define NMB_MIDICC  128
+#define NMB_PORT 512
+
+typedef struct {
+  bool valid;
+  float value;
+} CacheValue;
+
 typedef struct
 {
     int sockfd;
@@ -58,6 +66,8 @@ typedef struct
     int patch_input_port;
     int midi_input_port;
 
+    CacheValue midicc_cache[NMB_MIDICC];
+    CacheValue control_input_cache[NMB_PORT]; // Index is port number so space for non control inputs are there but not used
     LV2_URID patch_Get;
     LV2_URID patch_Set;
     LV2_URID patch_property;
@@ -271,6 +281,13 @@ static LV2UI_Handle instantiate(const LV2UI_Descriptor* descriptor, const char* 
     ui->controller = controller;
     sprintf(ui->plugin_uri,"%s",plugin_uri);
 
+    for (int i = 0; i < NMB_PORT; i++) {
+      ui->control_input_cache[i].valid = false;
+    }
+    for (int i = 0; i < NMB_MIDICC; i++) {
+      ui->midicc_cache[i].valid = false;
+    }
+
   get_instance_id(ui->uid,sizeof(ui->uid));
   find_ports(ui->plugin_uri, ui);
 
@@ -330,6 +347,22 @@ static LV2UI_Handle instantiate(const LV2UI_Descriptor* descriptor, const char* 
 */
 
     lv2_atom_forge_init(&ui->forge, ui->map);
+
+    {
+       LV2_Atom_Forge forge;
+       uint8_t buffer[1000];
+       LV2_Atom_Forge_Frame frame;
+
+       lv2_atom_forge_init(&forge, ui->map);
+
+       lv2_atom_forge_set_buffer(&forge, buffer, sizeof(buffer));
+       lv2_atom_forge_object(&forge, &frame, 0, ui->patch_Get);
+       lv2_atom_forge_pop(&forge, &frame);
+
+       ui->write(ui->controller, ui->patch_input_port, ((LV2_Atom*)buffer)->size + sizeof(LV2_Atom), ui->atom_eventTransfer, buffer);
+    }
+
+
 
     return ui;
 }
@@ -438,6 +471,7 @@ static int handle_server_message(char *message, ThisUI* ui) {
 
     printf("\nMessage with %d bytes received  %s", strlen(message), message);fflush(stdout);
 
+    char *msg_cmd = NULL;
     char *msg_type = NULL;
     char *msg_key = NULL;
     char *msg_value = NULL;
@@ -449,7 +483,9 @@ static int handle_server_message(char *message, ThisUI* ui) {
         char *parts[2]; 
         int num_parts = split_on_delim(props[i], "|", parts, 2);
         if (num_parts == 2) {
-          if (!strcmp(parts[0], "type")) {
+          if (!strcmp(parts[0], "cmd")) {
+             msg_cmd = parts[1];
+          } else if (!strcmp(parts[0], "type")) {
              msg_type = parts[1];
           } else if (!strcmp(parts[0], "key")) {
              msg_key = parts[1];
@@ -459,17 +495,33 @@ static int handle_server_message(char *message, ThisUI* ui) {
         }
     }
 
-    printf("\nCmd %s  %s   %s", msg_type, msg_key, msg_value);
+    printf("\nCmd %s %s  %s   %s", msg_cmd, msg_type, msg_key, msg_value);
     fflush(stdout);
 
-    if (!strcmp(msg_type,"control-input-port")) {
+
+    if (!strcmp(msg_cmd,"get")) {
+        printf("\nReceived get command for type %s  key %s", msg_type, msg_key);fflush(stdout);
+        return 0;
+    }
+
+    if (strcmp(msg_cmd,"set")) {
+        printf("\nReceived unknown command %s", msg_cmd);fflush(stdout);
+        return 0;
+    }
+
+    if (!strcmp(msg_type,"control")) {
+       printf("\nReceived set control  %s  %s", msg_key, msg_value);fflush(stdout);
        float value = atof(msg_value);
        int port_index = atoi(msg_key);
+       if (port_index < NMB_PORT) {
+          ui->control_input_cache[port_index].value = value;
+          ui->control_input_cache[port_index].valid = true;
+       }
        ui->write(ui->controller, port_index, sizeof(float), /*ui->ui_floatProtocol*/ 0, &value);
        return 0;
     }
 
-    if (!strcmp(msg_type,"patch-parameter") && ui->patch_input_port >= 0) {
+    if (!strcmp(msg_type,"patch") && ui->patch_input_port >= 0) {
        LV2_Atom_Forge forge;
        uint8_t buffer[1000];
        LV2_Atom_Forge_Frame frame;
@@ -489,7 +541,7 @@ static int handle_server_message(char *message, ThisUI* ui) {
        return 0;
     }
 
-    if (!strcmp(msg_type,"midicc-parameter") && ui->midi_input_port >= 0) {
+    if (!strcmp(msg_type,"midicc") && ui->midi_input_port >= 0) {
 //       LV2_Atom_Forge forge;
        uint8_t buffer[1000];
 //       LV2_Atom_Forge_Frame frame;
@@ -538,10 +590,16 @@ static int handle_server_message(char *message, ThisUI* ui) {
     // MIDI message
     uint8_t* midi = (uint8_t*)(ev + 1);
        int channel = 0;
+       int cc = atoi(msg_key) & 0x7f;
+       int value = atoi(msg_value) & 0x7f;
           midi[0] = (uint8_t)(0xB0 | (channel & 0x0F));
-          midi[1] = atoi(msg_key);
+          midi[1] = cc;
           midi[2] = atoi(msg_value);
-
+       
+       if (cc >= 0 && cc < NMB_MIDICC) {
+          ui->midicc_cache[cc].value = value;
+          ui->midicc_cache[cc].valid = true;
+       }
 
 //    return sizeof(LV2_Atom) + seq->atom.size; // total size in bytes
 //}
@@ -626,6 +684,7 @@ static int handle_server_message(char *message, ThisUI* ui) {
     if (msg)
         ui->write(ui->controller, portIndex, lv2_atom_total_size(msg), ui->atom_eventTransfer, msg);
 */
+    printf("\nReceived unknown message type %s", msg_type);fflush(stdout);
     return 0;
 
 }
@@ -639,7 +698,6 @@ static int ui_idle(LV2UI_Handle handle)
     //    return 0;
  
     if (ui->state == STATE_RESET) {
-         printf("\nIDLE STATE_RESET");fflush(stdout);
        ui->sockfd = socket(AF_INET, SOCK_STREAM, 0);
        struct sockaddr_in servaddr = {0};
        servaddr.sin_family = AF_INET;
@@ -647,15 +705,21 @@ static int ui_idle(LV2UI_Handle handle)
        inet_pton(AF_INET, TCP_SERVER_IP, &servaddr.sin_addr);
 
        if (connect(ui->sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
-          perror("connect");
-          return -1;
+           close(ui->sockfd);
+           ui->sockfd = -1;
+          //perror("connect");
+          return 0;
+          //return -1;
        }
 
          char message[200];
          sprintf(message,"source|%s||plugin|%s",ui->uid,ui->plugin_uri);
          printf("\nMESSAGE %s", message);fflush(stdout); 
          int status = send_message(ui->sockfd, message, strlen(message));
-         if (!status) ui->state = STATE_OPERATIONAL;
+         if (!status) {
+            ui->state = STATE_OPERATIONAL;
+            printf("\nConnection with server established.");fflush(stdout);
+         }
     }
 
 /////
@@ -675,7 +739,19 @@ static int ui_idle(LV2UI_Handle handle)
             handle_server_message(buf, ui);
         }
     }
-    return 0; // 0 = keep calling idle
+
+    if (FD_ISSET(ui->sockfd, &rfds)) {
+        char buf[1];
+        ssize_t n = recv(ui->sockfd, buf, sizeof(buf), MSG_PEEK);
+        if (n <= 0) {
+            ui->state = STATE_RESET;
+            close(ui->sockfd);
+            ui->sockfd = -1;
+            printf("\nConnection with server lost.");fflush(stdout);
+        }
+    }
+
+    return 0;
 
 
 /////

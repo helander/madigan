@@ -19,9 +19,10 @@ import (
 
 type UIConnection struct {
     Conn     net.Conn
-    Messages []string // store all recent messages
+    Reported map[string]string 
     Id       string
     Plugin   string
+    Info     AllInfo
 }
 
 var (
@@ -29,6 +30,26 @@ var (
     mu          sync.Mutex
 )
 
+func ConnectionParamInfo(id string) AllInfo {
+    mu.Lock()
+    defer mu.Unlock()
+    con := connections[id];
+    if con == nil {
+       return AllInfo{}
+    }
+    return con.Info
+}
+
+//func GetPluginUri(id string) string {
+//    var result string
+//    mu.Lock()
+//    con := connections[id];
+//    if con != nil {
+//       result = con.Plugin
+//    }
+//    mu.Unlock()
+//    return result
+//}
 
 const MaxMessageLen = 16 * 1024 * 1024 // 16 MB safety limit
 
@@ -123,7 +144,7 @@ func handleTCPConnection(c net.Conn) {
     id := message["source"]
     plugin:= message["plugin"]
     mu.Lock()
-    connections[id] = &UIConnection{Conn: c, Id: id, Plugin: plugin}
+    connections[id] = &UIConnection{Conn: c, Id: id, Plugin: plugin, Info: GetAllParamInfo(plugin)}
     mu.Unlock()
 
     log.Println("UI connected:", id)
@@ -153,50 +174,56 @@ func handleTCPConnection(c net.Conn) {
     }
 }
 
-func httpStateHandler(w http.ResponseWriter, r *http.Request) {
-    id := r.URL.Query().Get("id")
-    mu.Lock()
-    conn, ok := connections[id]
-    mu.Unlock()
-    if !ok {
-        http.Error(w, "No such UI", 404)
-        return
-    }
-    for _, msg := range conn.Messages {
-        fmt.Fprintln(w, msg)
-    }
-}
 
-func httpSendHandler(w http.ResponseWriter, r *http.Request) {
-    id := r.URL.Query().Get("id")
+func madiganParameterHandler(w http.ResponseWriter, r *http.Request) {
+    context := r.URL.Query().Get("context")
     typ := r.URL.Query().Get("type")
     key := r.URL.Query().Get("key")
     value := r.URL.Query().Get("value")
-    cmd := fmt.Sprintf("type|%s||key|%s||value|%s", typ, key, value)
- 
-    mu.Lock()
-    conn, ok := connections[id]
-    mu.Unlock()
-    if !ok {
-        http.Error(w, "No such UI", 404)
-        return
+    switch r.Method {
+       case http.MethodGet:
+          cmd := fmt.Sprintf("cmd|get||type|%s||key|%s", typ, key)
+          mu.Lock()
+          conn, ok := connections[context]
+          if !ok {
+             mu.Unlock()
+             http.Error(w, "No such connection", 404)
+             return
+          }
+          globalkey := typ+key
+          fmt.Printf("\nglobalkey %s",globalkey)
+          reported, ok := conn.Reported[globalkey] 
+          mu.Unlock()
+          if !ok {
+             fmt.Printf("\nSending cmd %s   to %v",cmd, conn)
+             if err := SendMessage(conn.Conn, []byte(cmd)); err != nil {
+                http.Error(w, "Send failed", 500)
+                return
+             }
+          }
+          fmt.Fprintf(w, "%s", reported)
+       case http.MethodPatch:
+          cmd := fmt.Sprintf("cmd|set||type|%s||key|%s||value|%s", typ, key, value)
+          mu.Lock()
+          conn, ok := connections[context]
+          mu.Unlock()
+          if !ok {
+             http.Error(w, "No such connection", 404)
+             return
+          }
+          if err := SendMessage(conn.Conn, []byte(cmd)); err != nil {
+             http.Error(w, "Send failed", 500)
+             return
+          }
+          fmt.Fprintf(w, "Sent to %s: %s", context, cmd)
+       default:
+          w.Header().Set("Allow", "GET, PATCH")
+          http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
     }
-
-
-    if err := SendMessage(conn.Conn, []byte(cmd)); err != nil {
-           http.Error(w, "Send failed", 500)
-           return
-    }
-
-    fmt.Fprintf(w, "Sent to %s: %s", id, cmd)
 }
 
 func init() {
-    log.Printf("Madigan init")
     go tcpHandler()
 
-    http.HandleFunc("/madigan-state", httpStateHandler)
-    http.HandleFunc("/madigan-send", httpSendHandler)
-    log.Printf("Madigan init done")
-
+    http.HandleFunc("/madigan-parameter", madiganParameterHandler)
 }

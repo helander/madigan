@@ -2,3 +2,6 @@ gcc -fPIC -shared -o madigan.so madigan.c $(pkg-config --cflags --libs lv2 janss
 
 sudo mkdir -p /usr/lib/lv2/madigan.lv2
 sudo cp madigan.so manifest.ttl /usr/lib/lv2/madigan.lv2
+
+mkdir -p /home/soundcan/.lv2-plugins/madigan.lv2
+cp madigan.so manifest.ttl /home/soundcan/.lv2-plugins/madigan.lv2
